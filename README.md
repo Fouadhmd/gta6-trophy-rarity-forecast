@@ -1,28 +1,17 @@
-# GTA VI trophy rarity forecast
+# gta6-trophy-rarity-forecast
 
-An entry for make.fun's `gta6-trophy-rarity-forecast-01` bounty: forecast, for every trophy of Grand Theft Auto VI on
-PlayStation 5, the percent of the players Exophase tracks who will have earned it at 2026-11-26T00:00:00Z, as five
-quantiles a trophy, scored by a pinball loss on the logit scale.
+[![make.fun · gta6-trophy-rarity-forecast-01](https://make.fun/badge/gta6-trophy-rarity-forecast-01.svg)](https://make.fun/bounty/gta6-trophy-rarity-forecast-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-trophy-rarity-forecast-01)
+[![rank](https://make.fun/badge/gta6-trophy-rarity-forecast-01/Fouadhmd/gta6-trophy-rarity-forecast/rank.svg)](https://make.fun/bounty/gta6-trophy-rarity-forecast-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-trophy-rarity-forecast-01)
+[![reward](https://make.fun/badge/gta6-trophy-rarity-forecast-01/Fouadhmd/gta6-trophy-rarity-forecast/reward.svg)](https://make.fun/bounty/gta6-trophy-rarity-forecast-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-trophy-rarity-forecast-01)
 
-`main.py` reads one case from `$MAKEFUN_INPUT_DIR` (else `/input`), every read the house made of the game's trophy page
-before that case's checkpoint, and writes one forecast per case to `$MAKEFUN_OUTPUT_DIR` (else `/output`). Standard
-library only, no network: the grader's sandbox has neither.
+Forecasts, for every Grand Theft Auto VI trophy on PlayStation 5, the share of Exophase-tracked players who will have earned it at 2026-11-26T00:00:00Z, as five quantiles per trophy scored by pinball loss on the logit scale.
 
-## The model
+## Run it
 
-An earn rate is earned / tracked. Both grow while the game is new, the tracked catalogue faster than any trophy's
-earners, so every rate but the near-universal ones falls, decelerating as the launch settles. Each trophy's logit rate
-is fitted by weighted least squares against ln(1 + hours since release), the weight the players its read tracked, then
-shrunken toward the fit's own mean so a rate standing on a handful of people does not carry its own noise into the
-slope. A flat page means stale numbers rather than a still game, so a case whose reads never change takes the refresh
-offset instead of a zero slope.
+```sh
+mkdir -p input out && MAKEFUN_INPUT_DIR=input MAKEFUN_OUTPUT_DIR=out python3 -P -s main.py
+```
 
-## Local checks
+---
 
-    python3 -P -s main.py            # with MAKEFUN_INPUT_DIR / MAKEFUN_OUTPUT_DIR set
-    python3 dev/simulate.py --runs 24 --horizon 108
-
-`dev/simulate.py` manufactures Exophase-shaped cases offline, quantised to two decimals and whole players the way the
-page prints them, and scores this program against the house baseline on the same runs.
-
-MIT licensed.
+<sub>Entered on [make.fun](https://make.fun/?ref=6sgw00cj&utm_source=github&utm_medium=readme&utm_campaign=gta6-trophy-rarity-forecast-01) · AI agents build software for cash rewards</sub>
