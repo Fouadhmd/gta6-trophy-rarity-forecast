@@ -6,7 +6,10 @@ per-trophy earned counts that grow with the population but at their own difficul
 and to whole players, exactly as the page prints them, so a model that trusts a rate built on four people is punished
 the way the real grader punishes it.
 
-    python3 dev/simulate.py --runs 24 --horizon 108
+One process runs from the launch to the target. The history is the reads only up to the checkpoint; the answer is the
+read at the target, from the same growth schedule, so history and truth cannot disagree about the population's pace.
+
+    python3 dev/simulate.py --runs 24 --horizon 6510 --history-hours 66
 
 prints the mean pinball loss of main.py and of the house baseline over the runs, plus the spread of each run's loss.
 """
@@ -56,10 +59,10 @@ def score(answer: dict[int, float], forecast: dict[int, list[float]]) -> float:
     return total / items
 
 
-def build_case(rng: random.Random, index: int, horizon_min: int) -> tuple[dict, datetime]:
-    """One synthetic case: a history of stale-free reads and the answer read at its target."""
+def build_case(rng: random.Random, index: int, horizon_min: int, history_hours: float, flat: bool = False) -> tuple[dict, datetime]:
+    """One synthetic case: a history of reads up to the checkpoint, and the answer read at its target."""
     start = datetime(2026, 11, 18, 23, 50, tzinfo=timezone.utc)
-    checkpoint = start + timedelta(minutes=60 * 18 + 10 * index)
+    checkpoint = start + timedelta(hours=history_hours, minutes=10 * index)
     target = checkpoint + timedelta(minutes=horizon_min)
 
     trophies = []
@@ -74,51 +77,61 @@ def build_case(rng: random.Random, index: int, horizon_min: int) -> tuple[dict, 
         hazard[t["id"]] = base * rng.lognormvariate(0.0, 0.8)
     hazard[2] = 6.0  # Just Like Paradise, everyone's first
 
-    tracked = 638.0
-    earned = {tid: 0.0 for tid in range(1, 56)}
-    for tid in earned:
-        earned[tid] = 0.0
-    # seed a plausible launch state at the first refresh
+    # A launch state: the first refresh already took the tracked count up, so rates start from real earners.
+    cap = rng.uniform(80_000.0, 600_000.0)
+    rate_of_growth = rng.uniform(1.1, 1.7)
     tracked = 900.0
-    for tid in earned:
-        earned[tid] = tracked * hazard[tid] * 0.35
+    earned = {tid: tracked * hazard[tid] * 0.35 for tid in range(1, 56)}
     earned[2] = tracked * 0.9
 
-    history = []
-    moments = []
-    t = start
-    while t <= checkpoint:
-        if t > start + timedelta(minutes=30):
-            # Exophase refreshes on its own clock: a growing share of the install base turns up at once.
-            if t.minute % 30 == 0:
-                growth = rng.uniform(0.10, 0.35) * (0.55 ** (12 * (t - start).total_seconds() / 86400))
-                tracked *= 1.0 + growth
-        # earners accrue with the population between refreshes
-        dt_h = 1.0 / 6.0
-        active = tracked * 0.35
-        for tid in earned:
-            earned[tid] += active * hazard[tid] * dt_h * rng.lognormvariate(0.0, 0.15)
-        rates = [round(min(100.0, 100.0 * earned[x] / tracked), 2) for x in range(1, 56)]
-        history.append(
-            {
-                "slot": t.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "at": t.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
-                "players_tracked": int(tracked),
-                "trophies_earned": int(sum(earned.values())),
-                "rates": rates,
-            }
-        )
-        moments.append(t)
-        t += timedelta(minutes=10)
+    def population(hours: float) -> float:
+        """Exophase's tracked count: a saturating catalogue, not a compounding one."""
+        return cap / (1.0 + (cap / 900.0 - 1.0) * math.exp(-rate_of_growth * hours))
 
-    # the answer: the read at the target
-    span = (target - checkpoint).total_seconds() / 3600.0
-    for _ in range(int(span * 6)):
-        if rng.random() < 0.03:
-            tracked *= 1.0 + rng.uniform(0.05, 0.3)
+    history = []
+    t = start
+    step = timedelta(minutes=30 if flat else 10)
+    published = ([round(min(100.0, 100.0 * earned[x] / tracked), 2) for x in range(1, 56)], int(tracked), int(sum(earned.values())))
+    jumped = False
+    while t <= target:
+        hours = (t - start).total_seconds() / 3600.0
+        # Exophase refreshes on its own clock, every 30 minutes: the page jumps to the tracked count and every rate
+        # is dragged down by the players who arrive holding fewer trophies than the ones already tracked. Between
+        # refreshes the page stands still, exactly as it did through the whole launch night, and a page that stands
+        # still for hours (the launch night itself) jumps about sixfold once and then stands still again.
+        refresh = False
+        if flat:
+            if t > checkpoint and not jumped:
+                tracked *= 6.06
+                jumped = True
+                refresh = True
+        elif t > start and t.minute % 30 == 0:
+            tracked = population(hours)
+            refresh = True
+        if refresh:
+            published = (
+                [round(min(100.0, 100.0 * earned[x] / tracked), 2) for x in range(1, 56)],
+                int(tracked),
+                int(sum(earned.values())),
+            )
+        # earners accrue with the population between refreshes, on the true count, not the shown one
         active = tracked * 0.35
         for tid in earned:
             earned[tid] += active * hazard[tid] / 360.0 * rng.lognormvariate(0.0, 0.15)
+
+        if t <= checkpoint:
+            rates, shown_players, shown_earned = published
+            history.append(
+                {
+                    "slot": t.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "at": t.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+                    "players_tracked": shown_players,
+                    "trophies_earned": shown_earned,
+                    "rates": rates,
+                }
+            )
+        t += step
+
     answer = {tid: round(min(100.0, 100.0 * earned[tid] / tracked), 2) for tid in earned}
 
     case = {
@@ -150,6 +163,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", type=int, default=12)
     ap.add_argument("--horizon", type=int, default=6510)
+    ap.add_argument("--history-hours", type=float, default=66.0)
+    ap.add_argument("--flat", action="store_true", help="the page does not change until the checkpoint (launch night)")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--model", default=str(ROOT / "main.py"))
     args = ap.parse_args()
@@ -158,7 +173,7 @@ def main() -> None:
     rng = random.Random(args.seed)
     mine, house = [], []
     for i in range(args.runs):
-        case, answer = build_case(rng, i, args.horizon)
+        case, answer = build_case(rng, i, args.horizon, args.history_hours, args.flat)
         rows = model.forecast_case(case, case["id"])["trophies"]
         got = {r["id"]: [float(x) for x in r["q"]] for r in rows}
         mine.append(score(answer, got))
@@ -171,6 +186,8 @@ def main() -> None:
     report = {
         "runs": args.runs,
         "horizon_minutes": args.horizon,
+        "history_hours": args.history_hours,
+        "flat": args.flat,
         "model_mean": round(sum(mine) / len(mine), 4),
         "model_best": round(mine[0], 4),
         "model_worst": round(mine[-1], 4),
